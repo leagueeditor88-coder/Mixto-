@@ -11,13 +11,13 @@ class TransitionPlannerTest {
         val plan = TransitionPlanner.plan(outgoing, incoming, 8, "Desvanecer")
 
         assertEquals("Desvanecer", plan.style)
-        assertEquals(8_000, plan.fadeMs)
+        assertEquals(7_000, plan.fadeMs)
     }
 
     @Test fun keepsFallbackWhenBeatGridIsMissing() {
         val plan = TransitionPlanner.plan(null, null, 8, "Ascender")
 
         assertEquals("Ascender", plan.style)
-        assertEquals(8_000, plan.fadeMs)
+        assertEquals(4_000, plan.fadeMs)
     }
 }
