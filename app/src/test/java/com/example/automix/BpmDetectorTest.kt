@@ -7,18 +7,22 @@ import kotlin.math.abs
 
 class BpmDetectorTest {
     @Test fun detectsSynthetic120BpmPulseTrain() {
-        val frames = 3000
-        val period = 50 // 100 Hz envelope => 120 BPM
-        val signal = MutableList(frames) { 10.0 }
+        // BeatGridDetector analyses 50 ms energy windows, so 120 BPM is one
+        // pulse every 10 frames (500 ms). Vary pulse strength deterministically
+        // to avoid an artificial half-tempo harmonic winning the estimator.
+        val frames = 600
+        val period = 10
+        val levels = MutableList(frames) { 0.01 }
         for (i in 0 until frames step period) {
-            signal[i] = 2000.0
-            if (i + 1 < frames) signal[i + 1] = 500.0
+            val beat = i / period
+            levels[i] = 0.1 + ((beat * 17 + beat * beat * 7) % 89) / 100.0
         }
-        val bpm = BpmDetector.estimate(signal)
-        assertEquals(true, bpm != null && abs(bpm - 120) <= 3)
+
+        val grid = BeatGridDetector.estimate(levels)
+        assertEquals(true, grid != null && abs(grid.bpm - 120.0) <= 3.0)
     }
 
     @Test fun rejectsTooShortSignal() {
-        assertNull(BpmDetector.estimate(List(100) { 0.0 }))
+        assertNull(BeatGridDetector.estimate(List(100) { 0.0 }))
     }
 }
