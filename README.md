@@ -1,10 +1,10 @@
 # Automix Android — versión 2.0
 
-Reproductor Android de música local con Automix, análisis local estimado, ordenación inteligente y una pantalla separada para Mashup.
+Reproductor Android de música local con un motor Automix que coordina análisis, selección, preparación, sincronización y transiciones, además de una pantalla separada para Mashup.
 
 ## Pantallas
 
-- **Reproductor:** biblioteca local, selección de carpetas, controles de reproducción, modo Aleatorio y Smart Reorder.
+- **Reproductor:** biblioteca local, selección de carpetas, controles de reproducción, Automix como control maestro y Aleatorio como modo independiente de selección.
 - **Mashup:** selección manual de pista A y pista B, búsqueda de una segunda pista compatible, y duración configurable de superposición.
 - **Ajustes:** duración de reproducción antes de cambiar, duración del crossfade, salto de intro, análisis BPM/tonalidad y búsqueda de etiquetas de género online.
 
@@ -13,7 +13,7 @@ Reproductor Android de música local con Automix, análisis local estimado, orde
 - Crossfade con curvas **Desvanecer** y **Ascender**.
 - Reproducción de una fracción configurable de cada canción (por defecto 70%).
 - Estimación local de BPM y tonalidad, con caché persistente en el teléfono.
-- Smart Reorder: pondera cercanía de BPM y compatibilidad tonal aproximada; deja las canciones sin datos al final.
+- Selección musical de candidatas en Automix: pondera BPM, equivalencias de medio/doble tempo, tonalidad y género cuando hay datos; solo puede cambiar el orden pendiente si Aleatorio está activo.
 - Mashup de dos pistas con fundido inicial/final y duración configurable (10–90 segundos).
 - Etiquetas de género consultando los catálogos públicos de **Deezer** y **iTunes** con el título/artista. Se muestran solo etiquetas, no enlaces ni artículos. No se envía el audio a Internet.
 - Ajustes de transición, modo, BPM, tonalidad y etiquetas guardados localmente.
@@ -21,7 +21,7 @@ Reproductor Android de música local con Automix, análisis local estimado, orde
 
 ## Límites importantes
 
-- **No es un mezclador DJ profesional.** Mashup superpone dos archivos y usa fundidos; no hace beatmatching real, cambio de tonalidad en tiempo real ni separación de stems.
+- **No es un mezclador DJ profesional.** Automix intenta alinear tiempos y ajustar la velocidad dentro de límites conservadores, pero no incorpora time-stretch especializado, detección semántica fiable de frases vocales ni separación de stems. Mashup superpone dos archivos y usa fundidos.
 - Smart Reorder se basa en BPM/tonalidad estimados; no garantiza una transición musical perfecta.
 - Las categorías que devuelven Deezer/iTunes dependen de sus catálogos. Esta versión no usa un modelo generativo de IA ni una búsqueda web general; emplea metadatos de catálogos musicales y no inventa etiquetas cuando no obtiene una coincidencia fiable.
 - El análisis inicial de una biblioteca grande puede consumir CPU, batería y tiempo. Se ejecuta en segundo plano y guarda resultados en el dispositivo.
@@ -29,7 +29,7 @@ Reproductor Android de música local con Automix, análisis local estimado, orde
 
 ## Compilar en GitHub Actions
 
-El workflow incluido (`.github/workflows/build.yml`) compila con Gradle 8.7 y publica el artefacto `Automix-APK` con `app-debug.apk`.
+El workflow incluido (`.github/workflows/build.yml`) ejecuta las pruebas unitarias y compila con Gradle 8.7; después publica el artefacto `Automix-APK` con `app-debug.apk`.
 
 Para un repositorio nuevo, descomprime el ZIP y sube **el contenido del proyecto** a la raíz del repositorio (incluidos `app/`, `build.gradle.kts`, `settings.gradle.kts` y `.github/`). Si el repositorio tiene un workflow personalizado que construye un ZIP, sustituye el ZIP conservando exactamente el nombre que dicho workflow espera.
 

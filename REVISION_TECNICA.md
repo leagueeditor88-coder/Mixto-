@@ -1,19 +1,28 @@
-# Revisión técnica de Automix — actualización de trabajo
+# Revisión técnica de Automix — integración global
 
-## Cambios incluidos en esta entrega
+## Integración realizada
 
-- Se mejoró `BpmDetector.estimate`: la autocorrelación normalizada se calcula una sola vez por retardo, se pondera el segundo armónico para reducir algunos errores de medio/doble tempo y se aplica una penalización pequeña al subarmónico.
-- Se añadió `BpmDetectorTest.kt` con pruebas JVM para una señal sintética de 120 BPM y para el rechazo de señales demasiado cortas.
-- Se conservaron la interfaz, el servicio de reproducción y las dependencias originales; no se añadieron bibliotecas externas sin integración verificada.
+- Se conserva una sola sesión de reproducción basada en Media3/ExoPlayer.
+- El botón AUTOMIX controla el motor automático; Aleatorio es un modo de selección independiente.
+- El selector solo reordena candidatas cuando Aleatorio está activo. En los demás modos conserva el orden de la cola.
+- `BpmAnalysisRepository` comparte BPM/beatgrid entre la biblioteca y el servicio, y persiste los resultados por URI.
+- Se añadió `KeyAnalysisRepository` para compartir y persistir la detección de tonalidad entre la biblioteca y el preanálisis del servicio.
+- El preanálisis prioriza varias candidatas cuando Aleatorio está activo y solo la siguiente en modo ordenado; el análisis de estructura se limita para controlar el coste de CPU.
+- Los resultados de BPM/beatgrid que terminan durante la reproducción se publican en el selector y pueden actualizar la rejilla de la pista que esté sonando.
+- La biblioteca captura el orden visible antes de iniciar el trabajo en segundo plano, para analizar primero las canciones más próximas.
+- `TransitionPlanner` considera equivalencias de medio/doble tempo al decidir la duración y el estilo de transición.
+- Se añadieron pruebas unitarias para el fallback del planificador y la equivalencia 70/140 BPM.
 
-## Límites conocidos
+## Verificación disponible
 
-- Esta mejora no sustituye una detección de beats basada en modelos ni garantiza BPM correcto en todos los géneros. La estimación trabaja sobre la envolvente de energía de hasta los primeros 30 segundos.
-- La detección real de intro/outro por contenido todavía requiere un analizador dedicado de PCM y su integración con la planificación del crossfade. No se debe interpretar la duración del archivo como una medida de outro musical.
-- SoundTouch/Rubber Band necesitan una ruta de audio PCM real para cambiar tempo/tono; añadir solo la dependencia no implementaría beatmatching.
-- Demucs/ONNX requiere un modelo compatible, pre/postprocesamiento y pruebas de memoria/rendimiento en dispositivos Android. No se activa en esta entrega.
-- El motor actual `MediaPlayer` y la interfaz se han mantenido para minimizar el riesgo de regresiones.
+- Se inspeccionó la estructura del ZIP y la presencia de configuración Gradle, manifiesto, recursos, servicio y analizadores.
+- Se ejecutó un intento de análisis con `kotlinc`, pero sin Android SDK ni dependencias Android/Compose/Media3 el proyecto produce referencias no resueltas; ese intento no equivale a una compilación Android válida.
+- No se pudo ejecutar `gradle assembleDebug` en este entorno porque Gradle y Android SDK no están disponibles.
+- Las pruebas unitarias están añadidas, pero todavía deben ejecutarse mediante Gradle/Android Studio o el workflow de GitHub Actions.
 
-## Verificación
+## Limitaciones conocidas
 
-El ZIP se ha comprobado estructuralmente. No se pudo ejecutar una compilación Gradle en este entorno porque no está disponible el ejecutable Gradle ni un wrapper dentro del proyecto. Por tanto, las pruebas nuevas están añadidas, pero aún deben ejecutarse en Android Studio o mediante CI.
+- El análisis RMS no identifica de forma fiable voces, versos, estribillos ni frases musicales.
+- BPM, tonalidad, beatgrid y energía son estimaciones y pueden fallar según el contenido de audio.
+- El beatmatching actual limita el cambio de velocidad y no incorpora un algoritmo de time-stretch especializado que garantice preservar el tono.
+- La integración debe probarse en un dispositivo real para validar permisos, notificaciones, controles de pantalla bloqueada, transiciones audibles y consumo de batería.

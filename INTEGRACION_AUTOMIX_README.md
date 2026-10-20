@@ -1,32 +1,26 @@
-# Automix — integración del DJ inteligente
+# Automix — integración del motor DJ automático
 
-## Qué incluye esta iteración
+## Arquitectura integrada
 
-- **AUTOMIX** es el modo DJ inteligente; Smart ya no es un modo independiente.
-- **Aleatorio** se mantiene para reproducción normal y puede dar variedad a los candidatos de AUTOMIX.
-- **BPM** sigue disponible en la biblioteca para análisis/ordenación. El análisis de BPM y tonalidad de la biblioteca se ejecuta en segundo plano; si termina mientras AUTOMIX está activo, se reorganiza la cola restante sin reiniciar la canción actual.
-- El servicio comparte una sola decodificación PCM para detectar límites audibles y calcular la envolvente RMS.
-- `TrackStructureAnalyzer` ahora recibe la envolvente RMS y produce candidatos de cambio basados en cambios de energía/zonas de baja energía.
-- El porcentaje seleccionado (70 % por defecto) es el inicio de búsqueda: AUTOMIX prefiere un candidato estructural posterior si existe antes del margen de seguridad del final.
-- Beat Grid, planificación de transición, ajuste de BPM y alineación rítmica siguen integrados como heurísticas conservadoras.
-- Se reserva margen para iniciar el crossfade antes del final audible de la pista.
+- **AUTOMIX** es el control maestro de selección, preparación, sincronización y transición.
+- **Aleatorio** controla si el motor puede reordenar las candidatas pendientes por compatibilidad. En modo ordenado se conserva estrictamente la cola.
+- BPM/beatgrid se comparten mediante `BpmAnalysisRepository`, con caché en memoria y persistencia por URI.
+- La tonalidad se comparte mediante `KeyAnalysisRepository`, también con caché y persistencia por URI.
+- La biblioteca prioriza el análisis en el orden visible de reproducción y después completa la biblioteca en segundo plano.
+- Durante AUTOMIX se preanalizan varias candidatas (BPM/beatgrid y tonalidad); la estructura y los límites audibles se preparan con una prioridad más conservadora para no bloquear la reproducción.
+- La selección pondera BPM, equivalencias de medio/doble tempo, compatibilidad Camelot y género cuando hay datos disponibles.
+- El planificador intenta elegir puntos de transición usando límites audibles, energía, rejilla rítmica y una ventana de recuperación.
+- El beatmatching ajusta la velocidad de forma progresiva y limitada; si la relación es demasiado extrema o el análisis no es fiable, usa velocidad normal.
+- La interfaz mantiene AUTOMIX como único control del motor y Aleatorio como modo independiente.
 
-## Limitaciones explícitas
+## Límites explícitos
 
-- El análisis RMS **no identifica de forma fiable voces, versos, estribillos, puentes instrumentales ni frases musicales**. Un cambio de energía es solo un candidato heurístico, no una comprensión semántica de la canción.
-- Si no hay candidato adecuado, se usa el punto base limitado por el margen de recuperación. No hay una espera ilimitada: el sistema debe evitar terminar la pista sin transición.
-- La detección de BPM, tonalidad y compases depende de la calidad del audio y puede fallar en canciones con percusión ambigua, cambios de tempo o música poco rítmica.
-- No se ha podido verificar una compilación Android completa porque este paquete no incluye el proyecto Gradle, manifiesto, recursos ni `gradlew`. Se requiere probarlo dentro del proyecto original.
+- La estructura basada en RMS detecta cambios de energía y zonas de baja energía; no identifica de forma fiable voces, versos, estribillos o frases musicales.
+- La detección de BPM, beatgrid y tonalidad es heurística y puede fallar en música con tempo variable, percusión ambigua o contenido poco rítmico.
+- La sincronización de fase es conservadora. No equivale a un sistema de beatmatching profesional con detección robusta de frases y separación de stems.
+- El motor ajusta velocidad mediante Media3; no se ha integrado un algoritmo de time-stretch dedicado que garantice preservar el tono en todo el rango.
+- La compilación y las pruebas instrumentadas deben ejecutarse con Android SDK/Gradle disponible. El entorno de edición usado para esta integración no tiene Gradle ni Android SDK configurados, por lo que no debe afirmarse que se ha generado un APK aquí.
 
-## Archivos
+## Construcción
 
-Copiar estos archivos al paquete Android existente, reemplazando los correspondientes:
-
-- `MainActivity.kt`
-- `AutomixService.kt`
-- `AudioBoundaryDetector.kt`
-- `TrackStructureAnalyzer.kt`
-- `TransitionPlanner.kt`
-- `BeatGridDetector.kt`
-
-No se incluye un APK compilado.
+El proyecto contiene `settings.gradle.kts`, `build.gradle.kts`, `app/build.gradle.kts`, manifiesto, recursos y un workflow de GitHub Actions que instala Gradle 8.7 y ejecuta `assembleDebug`. No incluye `gradlew`; en local puede compilarse con Gradle 8.7 instalado o mediante el workflow.
