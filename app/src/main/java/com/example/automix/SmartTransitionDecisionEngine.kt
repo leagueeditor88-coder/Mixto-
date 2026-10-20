@@ -43,13 +43,14 @@ internal object SmartTransitionDecisionEngine {
         val start = audibleStartMs.coerceIn(0L, duration)
         val end = audibleEndMs.coerceIn(start, duration)
         val activeLength = (end - start).coerceAtLeast(1L)
-        val fade = min(requestedFadeMs.coerceAtLeast(0).toLong(), activeLength / 4L)
-            .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        val requestedCap = requestedFadeMs.coerceIn(3_000, 7_000).toLong()
+        val safeFadeCap = min(requestedCap, activeLength / 4L)
+        val fallbackFade = min(safeFadeCap, 4_000L).coerceAtLeast(0L).toInt()
         val now = currentPositionMs.coerceIn(start, end)
         val earliest = max(searchStartMs, now + 150L).coerceAtMost(end)
         // El porcentaje abre una ventana acotada: buscamos hasta 15 s como máximo.
         // Si la pista es corta, manda el límite de seguridad previo al final audible.
-        val endSafetyDeadline = (end - fade.toLong() - safetyMarginMs).coerceAtLeast(earliest)
+        val endSafetyDeadline = (end - safeFadeCap - safetyMarginMs).coerceAtLeast(earliest)
         val searchWindow = maxSearchWindowMs.coerceIn(10_000L, 15_000L)
         val deadline = min(endSafetyDeadline, (searchStartMs.coerceAtLeast(earliest) + searchWindow))
             .coerceAtLeast(earliest)
@@ -64,7 +65,7 @@ internal object SmartTransitionDecisionEngine {
 
         if (candidates.isEmpty()) {
             val reason = if (now >= searchStartMs) Reason.SEARCH_WINDOW_EXPIRED else Reason.SAFE_FALLBACK
-            return Decision(deadline.toIntSafe(), fade, 0.0, reason, deadline, 0)
+            return Decision(deadline.toIntSafe(), fallbackFade, 0.0, reason, deadline, 0)
         }
 
         val maxEnergy = analysis?.regions?.maxOfOrNull { it.meanEnergy }?.coerceAtLeast(1e-9) ?: 1.0
@@ -117,9 +118,17 @@ internal object SmartTransitionDecisionEngine {
             }
         }
 
+        val selectedRegion = analysis?.regions?.firstOrNull { bestAt >= it.startMs && bestAt <= it.endMs }
+        val preferredFade = when {
+            tempoRatio != null && tempoRatio <= 1.06 && selectedRegion?.type == TrackStructureAnalyzer.RegionType.LOW_ENERGY_BREAK -> 6_000L
+            tempoRatio != null && tempoRatio <= 1.12 && selectedRegion?.type == TrackStructureAnalyzer.RegionType.ENERGY_CHANGE -> 5_000L
+            tempoRatio != null && tempoRatio <= 1.06 -> 5_000L
+            else -> 3_500L
+        }
+        val adaptiveFade = min(safeFadeCap, preferredFade).coerceAtLeast(0L).toInt()
         return Decision(
             transitionAtMs = bestAt.toIntSafe(),
-            fadeMs = fade,
+            fadeMs = adaptiveFade,
             score = bestScore,
             reason = if (bestBeatAligned) Reason.BEAT_ALIGNED_CANDIDATE else Reason.STRUCTURE_CANDIDATE,
             safetyDeadlineMs = deadline,

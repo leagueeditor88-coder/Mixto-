@@ -205,7 +205,10 @@ class AutomixService : Service() {
         val start = audibleStartMs.coerceIn(0L, duration)
         val end = audibleEndMs.coerceIn(start, duration)
         val activeLength = (end - start).coerceAtLeast(1L)
-        val configuredFade = fadeSec.coerceAtLeast(0).toLong() * 1000L
+        // En Automix no se permiten fundidos largos por defecto; fuera de Automix
+        // se respeta la duración configurada por el usuario.
+        val configuredSeconds = if (automixEnabled) fadeSec.coerceIn(3, 7) else fadeSec.coerceAtLeast(0)
+        val configuredFade = configuredSeconds.toLong() * 1000L
         val fade = min(configuredFade, activeLength / 4L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         val percent = playPercent.coerceIn(1, 100).toLong()
         val target = start + (activeLength * percent / 100L)
@@ -1182,6 +1185,40 @@ class AutomixService : Service() {
         requestStructureAnalysis(track)
     }
 
+    /**
+     * Omite solo una intro que el análisis sugiera como tramo inicial de baja energía
+     * seguido de un aumento claro. No es detector de secciones/voces: ante duda conserva la intro.
+     */
+    private fun estimateAutomaticIntroSkipMs(
+        analysis: TrackStructureAnalyzer.Analysis?,
+        audibleStartMs: Long,
+        durationMs: Long
+    ): Long {
+        if (analysis == null || durationMs <= 0L) return 0L
+        val maxSkip = minOf(durationMs / 4L, 25_000L)
+        val start = audibleStartMs.coerceIn(0L, maxSkip)
+        val firstIndex = analysis.regions.indexOfFirst {
+            it.endMs > start && it.startMs <= start + 2_500L
+        }
+        if (firstIndex < 0) return 0L
+        val first = analysis.regions[firstIndex]
+        if (first.type != TrackStructureAnalyzer.RegionType.LOW_ENERGY_BREAK || first.confidence < 0.25) return 0L
+
+        for (i in firstIndex + 1 until analysis.regions.size) {
+            val region = analysis.regions[i]
+            if (region.startMs - start > 25_000L) break
+            if (region.type == TrackStructureAnalyzer.RegionType.LOW_ENERGY_BREAK) continue
+            val introLength = region.startMs - start
+            val energyRise = region.meanEnergy >= first.meanEnergy * 1.7
+            if (introLength in 4_000L..20_000L && energyRise && region.confidence >= 0.22) {
+                return region.startMs.coerceIn(start, maxSkip)
+            }
+            // El primer cambio no parece un comienzo claro: no saltar más adelante a ciegas.
+            return 0L
+        }
+        return 0L
+    }
+
     private fun applyBoundaries(
         deck: Deck,
         track: Track,
@@ -1193,7 +1230,10 @@ class AutomixService : Service() {
         val duration = durationMs.toLong().takeIf { it > 0L } ?: boundaries.durationMs
         val detectedStart = boundaries.audibleStartMs.coerceIn(0L, duration)
         val userSkip = (skipIntroSec * 1000L).coerceAtLeast(0L)
-        val desiredStart = max(userSkip, detectedStart).coerceAtMost(duration / 4L)
+        val automaticIntroSkip = if (automixEnabled) {
+            estimateAutomaticIntroSkipMs(structureCache[key], detectedStart, duration)
+        } else 0L
+        val desiredStart = max(max(userSkip, detectedStart), automaticIntroSkip).coerceAtMost(duration / 4L)
         val currentPosition = try { deck.mp.currentPosition } catch (_: Exception) { return }
 
         // Solo hace seek automático si el análisis termina al principio de la pista;
@@ -1234,6 +1274,7 @@ class AutomixService : Service() {
                 incomingGrid = incomingGrid
             )
         } else null
+        if (decision != null) autoFadeMs = decision.fadeMs
         val selectedTarget = decision?.transitionAtMs?.toLong() ?: baseTarget
         val upper = max(searchDeadline, safeNow).coerceAtMost(endSafetyLimit)
         val unsnapped = selectedTarget.coerceIn(safeNow, upper).toInt()
@@ -1290,6 +1331,7 @@ class AutomixService : Service() {
             outgoingGrid = grid,
             incomingGrid = nextGrid
         ) else null
+        if (decision != null) autoFadeMs = decision.fadeMs
         val selected = decision?.transitionAtMs?.toLong() ?: triggerAtMs.toLong()
         val snappedRaw = snapToBeat(selected.toInt(), duration, currentPosition, autoFadeMs, grid)
         val snapped = snappedRaw.toLong().coerceIn(safeNow, deadline).coerceIn(0L, duration).toInt()
