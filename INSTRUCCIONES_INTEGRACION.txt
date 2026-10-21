@@ -1,15 +1,12 @@
-AUTOMIX — BLOQUE INTEGRADO DE BIBLIOTECA + IDENTIFICACIÓN DE GÉNEROS
+AUTOMIX — ARCHIVOS NECESARIOS (BÚSQUEDA WEB DE GÉNEROS)
 
-Este ZIP contiene solo archivos modificados/nuevos, con rutas relativas a la raíz del repositorio.
+Contenido:
+- GenreWebLookup.kt: consulta HTML de DuckDuckGo; no usa API musical ni clave.
+- GenreIdentificationWorker.kt: procesamiento de identificación en segundo plano.
+- MainActivity.kt: interfaz e indicador de progreso con la corrección de Compose incluida en el parche de compilación.
+- AutomixService.kt: servicio integrado que acompaña este bloque.
+- app/build.gradle.kts: configuración usada por el bloque para las dependencias del worker.
 
-Incluye la integración de los cambios previos de Biblioteca organizada y de Identificación musical en segundo plano:
-- MainActivity: vistas de biblioteca, preferencias y panel de progreso de identificación.
-- AutomixService: conserva cambios de servicio de las ramas integradas.
-- GenreIdentificationWorker / GenreWebLookup: trabajo en segundo plano y búsqueda web.
-- app/build.gradle.kts: dependencia WorkManager.
+Integración: copiar los archivos respetando las rutas dentro de app/. Revisa diferencias antes de sobrescribir si tu rama tiene cambios posteriores.
 
-Aplicación: descomprime en la raíz del repositorio y permite sobrescribir los archivos indicados. Haz commit antes para poder revertir si hace falta.
-
-VALIDACIÓN: el ZIP fue revisado para detectar marcadores de conflicto y rutas; no se ejecutó una compilación Android completa ni una prueba en dispositivo. Por ello, ejecutar GitHub Actions antes de darlo por terminado.
-
-Alcance: esta integración combina los parches existentes de biblioteca y géneros. No debe interpretarse como garantía de que todas las funciones descritas conceptualmente (por ejemplo, cada detalle del reproductor clásico/lock-screen) estén completamente implementadas; comprobar en la app tras compilar.
+Alcance: este ZIP reúne los archivos de la búsqueda web de géneros y las correcciones de compilación disponibles. No confirma que todas las vistas de biblioteca ni el interruptor de aleatorio estén ya corregidos. El buscador puede bloquear consultas automatizadas y la clasificación por fragmentos HTML es heurística; debe probarse en GitHub Actions y en el dispositivo.
