@@ -212,6 +212,7 @@ class MainActivity : ComponentActivity() {
                     onPlayTrack = { idx -> playAt(idx) },
                     onStartAutomix = { toggleAutomix() },
                     onSetSort = { mode -> selectSort(mode) },
+                    onToggleShuffle = { toggleShuffle() },
                     onSetPercent = { v ->
                         percent = v
                         svc?.playPercent = v
@@ -401,14 +402,20 @@ class MainActivity : ComponentActivity() {
         else -> filteredTracks.sortedWith(Comparator { a, b -> collator.compare(a.title, b.title) })
     }
 
+    private fun toggleShuffle() {
+        val nextMode = if (sortMode == SORT_RANDOM) SORT_RECENT else SORT_RANDOM
+        selectSort(nextMode)
+        // El cambio explícito de aleatorio sí actualiza la cola activa; los cambios
+        // de orden visual de la biblioteca no deben hacerlo.
+        svc?.reorderQueue(buildDisplayList())
+    }
+
     private fun selectSort(mode: String) {
         sortMode = mode
         if (mode == SORT_RANDOM) randomRank = allTracks.shuffled().mapIndexed { i, t -> t.uri.toString() to i }.toMap()
         if (mode == SORT_TITLE || mode == SORT_ARTIST || mode == SORT_BPM || mode == SORT_RECENT) lastManualSort = mode
         prefs.edit().putString("sort_mode", sortMode).putString("sort_manual", lastManualSort).apply()
-        val display = buildDisplayList()
         svc?.setRandomSelectionEnabled(mode == SORT_RANDOM)
-        svc?.reorderQueue(display)
         pushState { it.copy(sortMode = mode) }
         refreshNow()
     }
@@ -974,6 +981,7 @@ fun AutomixApp(
     onPlayTrack: (Int) -> Unit,
     onStartAutomix: () -> Unit,
     onSetSort: (String) -> Unit,
+    onToggleShuffle: () -> Unit,
     onSetPercent: (Int) -> Unit,
     onSetFade: (Int) -> Unit,
     onSetSkip: (Int) -> Unit,
@@ -1045,6 +1053,7 @@ fun AutomixApp(
                     onPlayTrack = onPlayTrack,
                     onStartAutomix = onStartAutomix,
                     onSetSort = onSetSort,
+                    onToggleShuffle = onToggleShuffle,
                     onRequestPermissions = onRequestPermissions,
                     onSeek = onSeek
                 )
@@ -1058,6 +1067,8 @@ fun AutomixApp(
                     onFilterGenre = onFilterGenre,
                     onPlayTrack = onPlayFiltered,
                     onPlayThisOrder = onPlayThisOrder,
+                    onSetSort = onSetSort,
+                    onToggleShuffle = onToggleShuffle,
                     onStartGenreScan = onStartGenreScan,
                     onPauseGenreScan = onPauseGenreScan
                 )
@@ -1087,6 +1098,7 @@ fun PlayerScreen(
     onPlayTrack: (Int) -> Unit,
     onStartAutomix: () -> Unit,
     onSetSort: (String) -> Unit,
+    onToggleShuffle: () -> Unit,
     onRequestPermissions: () -> Unit,
     onSeek: (Int) -> Unit
 ) {
@@ -1258,7 +1270,7 @@ fun PlayerScreen(
                     state.sortMode == "Aleatorio",
                     Modifier.fillMaxWidth(),
                     Color(0xFFFF9800)
-                ) { onSetSort("Aleatorio") }
+                ) { onToggleShuffle() }
             }
         }
 
@@ -1525,6 +1537,8 @@ fun LibraryScreen(
     onFilterGenre: (String) -> Unit,
     onPlayTrack: (List<Track>, Int) -> Unit,
     onPlayThisOrder: (List<Track>) -> Unit,
+    onSetSort: (String) -> Unit,
+    onToggleShuffle: () -> Unit,
     onStartGenreScan: () -> Unit,
     onPauseGenreScan: () -> Unit
 ) {
@@ -1537,6 +1551,9 @@ fun LibraryScreen(
     var selectedArtist by remember { mutableStateOf<String?>(null) }
     var selectedGenre by remember { mutableStateOf<String?>(null) }
     var sortExpanded by remember { mutableStateOf(false) }
+    var gridMode by remember(selectedTab) {
+        mutableStateOf(libraryPrefs.getBoolean("library_grid_$selectedTab", selectedTab == 1 || selectedTab == 3))
+    }
 
     val filtered = remember(
         state.tracks, state.searchQuery, state.filterArtist,
@@ -1586,6 +1603,27 @@ fun LibraryScreen(
             placeholder = { Text("Buscar canciones, artistas, álbumes…") },
             leadingIcon = { Icon(Icons.Default.Search, null) }, singleLine = true
         )
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("Vista", fontSize = 12.sp, color = Color.Gray)
+            FilterChip(selected = !gridMode, onClick = {
+                gridMode = false
+                libraryPrefs.edit().putBoolean("library_grid_$selectedTab", false).apply()
+            }, label = { Text("Lista") })
+            FilterChip(selected = gridMode, onClick = {
+                gridMode = true
+                libraryPrefs.edit().putBoolean("library_grid_$selectedTab", true).apply()
+            }, label = { Text("Cuadrícula") })
+            Spacer(Modifier.weight(1f))
+            FilterChip(
+                selected = state.sortMode == "Aleatorio",
+                onClick = { onToggleShuffle() },
+                label = { Text(if (state.sortMode == "Aleatorio") "Aleatorio: ON" else "Aleatorio: OFF") }
+            )
+        }
         if (selectedTab == 0) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
@@ -1605,10 +1643,26 @@ fun LibraryScreen(
                 }
             }
             Text("${filtered.size} canciones", fontSize = 12.sp, color = Color.Gray, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
-            LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(filtered, key = { it.uri.toString() }) { track ->
-                    val idx = filtered.indexOf(track)
-                    TrackItem(track, state.bpmMap[track.uri.toString()], state.keyMap[track.uri.toString()], state.current?.uri == track.uri) { onPlayTrack(filtered, idx) }
+            if (gridMode) {
+                LazyVerticalGrid(GridCells.Adaptive(150.dp), Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    gridItems(filtered, key = { it.uri.toString() }) { track ->
+                        Card(Modifier.fillMaxWidth().clickable { onPlayTrack(filtered, filtered.indexOf(track)) }, shape = RoundedCornerShape(12.dp)) {
+                            Column(Modifier.padding(10.dp)) {
+                                AlbumArt(track.albumId, 88.dp)
+                                Spacer(Modifier.height(6.dp))
+                                Text(track.title, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(track.artist, fontSize = 11.sp, color = Color.Gray, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                if (track.genre.isNotBlank()) Text(track.genre, fontSize = 10.sp, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(filtered, key = { it.uri.toString() }) { track ->
+                        val idx = filtered.indexOf(track)
+                        TrackItem(track, state.bpmMap[track.uri.toString()], state.keyMap[track.uri.toString()], state.current?.uri == track.uri) { onPlayTrack(filtered, idx) }
+                    }
                 }
             }
             Button(onClick = { onPlayThisOrder(filtered) }, modifier = Modifier.fillMaxWidth().padding(12.dp).height(48.dp), shape = RoundedCornerShape(14.dp)) {
@@ -1624,7 +1678,7 @@ fun LibraryScreen(
                 LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 12.dp)) {
                     items(albumTracks, key = { it.uri.toString() }) { t -> TrackItem(t, state.bpmMap[t.uri.toString()], state.keyMap[t.uri.toString()], state.current?.uri == t.uri) { onPlayTrack(albumTracks, albumTracks.indexOf(t)) } }
                 }
-            } else {
+            } else if (gridMode) {
                 LazyVerticalGrid(GridCells.Adaptive(145.dp), Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     gridItems(albums.keys.toList(), key = { it }) { album ->
                         val list = albums[album].orEmpty(); val sample = list.firstOrNull()
@@ -1637,12 +1691,23 @@ fun LibraryScreen(
                         }
                     }
                 }
+            } else {
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    albums.forEach { (album, list) -> item(key = album) { Card(Modifier.fillMaxWidth().clickable { selectedAlbum = album }) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { val sample = list.firstOrNull(); if (sample != null) AlbumArt(sample.albumId, 52.dp) else Icon(Icons.Default.Album, null, modifier = Modifier.size(52.dp)); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(album, fontWeight = FontWeight.SemiBold); Text("${list.firstOrNull()?.artist ?: "Artista desconocido"} · ${list.size} temas", fontSize = 12.sp, color = Color.Gray) }; Icon(Icons.Default.ChevronRight, null) } } } }
+                }
             }
         } else if (selectedTab == 2) {
             if (selectedArtist != null) {
                 Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = { selectedArtist = null }) { Icon(Icons.Default.ArrowBack, "Volver") }; Text(selectedArtist!!, fontWeight = FontWeight.Bold) }
                 val artistTracks = artists[selectedArtist].orEmpty()
                 LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 12.dp)) { items(artistTracks, key = { it.uri.toString() }) { t -> TrackItem(t, state.bpmMap[t.uri.toString()], state.keyMap[t.uri.toString()], state.current?.uri == t.uri) { onPlayTrack(artistTracks, artistTracks.indexOf(t)) } } }
+            } else if (gridMode) {
+                LazyVerticalGrid(GridCells.Adaptive(145.dp), Modifier.weight(1f), contentPadding = PaddingValues(10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    gridItems(artists.keys.toList(), key = { it }) { artist ->
+                        val list = artists[artist].orEmpty()
+                        Card(Modifier.fillMaxWidth().clickable { selectedArtist = artist }) { Column(Modifier.padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(42.dp)); Spacer(Modifier.height(8.dp)); Text(artist, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis); Text("${list.size} canciones", fontSize = 12.sp, color = Color.Gray) } }
+                    }
+                }
             } else {
                 LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     artists.forEach { (artist, list) -> item(key = artist) { Card(Modifier.fillMaxWidth().clickable { selectedArtist = artist }) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp)); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(artist, fontWeight = FontWeight.SemiBold); Text("${list.size} canciones", fontSize = 12.sp, color = Color.Gray) }; Icon(Icons.Default.ChevronRight, null) } } } }
@@ -1680,12 +1745,16 @@ fun LibraryScreen(
                 Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = { selectedGenre = null }) { Icon(Icons.Default.ArrowBack, "Volver") }; Text(selectedGenre!!, fontWeight = FontWeight.Bold) }
                 val genreTracks = genres[selectedGenre].orEmpty()
                 LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 12.dp)) { items(genreTracks, key = { it.uri.toString() }) { t -> TrackItem(t, state.bpmMap[t.uri.toString()], state.keyMap[t.uri.toString()], state.current?.uri == t.uri) { onPlayTrack(genreTracks, genreTracks.indexOf(t)) } } }
-            } else {
+            } else if (gridMode) {
                 LazyVerticalGrid(GridCells.Adaptive(145.dp), Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     gridItems(genres.keys.toList(), key = { it }) { genre ->
                         val list = genres[genre].orEmpty()
                         Card(Modifier.fillMaxWidth().clickable { selectedGenre = genre }, shape = RoundedCornerShape(14.dp)) { Column(Modifier.padding(16.dp)) { Icon(Icons.Default.LibraryMusic, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(34.dp)); Spacer(Modifier.height(12.dp)); Text(genre, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis); Text("${list.size} canciones", fontSize = 12.sp, color = Color.Gray) } }
                     }
+                }
+            } else {
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    genres.forEach { (genre, list) -> item(key = genre) { Card(Modifier.fillMaxWidth().clickable { selectedGenre = genre }) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.LibraryMusic, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp)); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(genre, fontWeight = FontWeight.SemiBold); Text("${list.size} canciones", fontSize = 12.sp, color = Color.Gray) }; Icon(Icons.Default.ChevronRight, null) } } } }
                 }
             }
         } else {
@@ -1693,6 +1762,10 @@ fun LibraryScreen(
                 Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = { selectedFolder = null }) { Icon(Icons.Default.ArrowBack, "Volver") }; Text(selectedFolder!!, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 val folderTracks = folders[selectedFolder].orEmpty()
                 LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 12.dp)) { items(folderTracks, key = { it.uri.toString() }) { t -> TrackItem(t, state.bpmMap[t.uri.toString()], state.keyMap[t.uri.toString()], state.current?.uri == t.uri) { onPlayTrack(folderTracks, folderTracks.indexOf(t)) } } }
+            } else if (gridMode) {
+                LazyVerticalGrid(GridCells.Adaptive(145.dp), Modifier.weight(1f), contentPadding = PaddingValues(10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    gridItems(folders.keys.toList(), key = { it }) { folder -> val list = folders[folder].orEmpty(); Card(Modifier.fillMaxWidth().clickable { selectedFolder = folder }) { Column(Modifier.padding(14.dp)) { Icon(Icons.Default.Folder, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(36.dp)); Spacer(Modifier.height(8.dp)); Text(folder.substringAfterLast('/'), fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis); Text("${list.size} canciones", fontSize = 12.sp, color = Color.Gray) } } }
+                }
             } else {
                 LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     folders.forEach { (folder, list) -> item(key = folder) { Card(Modifier.fillMaxWidth().clickable { selectedFolder = folder }) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Folder, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp)); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(folder.substringAfterLast('/'), fontWeight = FontWeight.SemiBold); Text("${list.size} canciones", fontSize = 12.sp, color = Color.Gray); if (folder.contains('/')) Text(folder, fontSize = 10.sp, color = Color.Gray, maxLines = 1, overflow = TextOverflow.Ellipsis) }; Icon(Icons.Default.ChevronRight, null) } } } }
