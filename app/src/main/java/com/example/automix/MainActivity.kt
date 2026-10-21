@@ -51,6 +51,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.lifecycle.lifecycleScope
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.ExistingWorkPolicy
+import androidx.work.Constraints
+import androidx.work.NetworkType
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -121,7 +130,12 @@ class MainActivity : ComponentActivity() {
         val filterGenre: String = "",
         val upcomingQueue: List<Track> = emptyList(),
         val positionMs: Int = 0,
-        val durationMs: Int = 0
+        val durationMs: Int = 0,
+        val genreScanStatus: String = "Sin iniciar",
+        val genreScanProcessed: Int = 0,
+        val genreScanTotal: Int = 0,
+        val genreScanIdentified: Int = 0,
+        val genreScanPending: Int = 0
     )
 
     private val audioPerm: String =
@@ -228,6 +242,8 @@ class MainActivity : ComponentActivity() {
                     onDetectBpm = { detectBpmForCurrent() },
                     onDetectKey = { detectKeyForCurrent() },
                     onLookupGenre = { lookupGenreForCurrent() },
+                    onStartGenreScan = { startGenreScan() },
+                    onPauseGenreScan = { pauseGenreScan() },
                     onMashup = { second -> startMashup(second) },
                     onRequestPermissions = { ensurePermissions() },
                     onSearchChange = { q -> pushState { it.copy(searchQuery = q) } },
@@ -269,6 +285,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        lifecycleScope.launch {
+            while (true) {
+                refreshGenreScanStatus()
+                delay(1200)
+            }
+        }
+
         bindService(Intent(this, AutomixService::class.java), conn, BIND_AUTO_CREATE)
         ensurePermissions()
     }
@@ -287,6 +310,7 @@ class MainActivity : ComponentActivity() {
     private fun loadLibrary() {
         if (checkSelfPermission(audioPerm) != PackageManager.PERMISSION_GRANTED) return
         val found = mutableListOf<Track>()
+        val genreCache = readGenreCache()
         val proj = arrayOf(
     Media._ID, Media.TITLE, Media.ARTIST, Media.DURATION, Media.DATA,
     Media.ALBUM, Media.GENRE, Media.ALBUM_ID, Media.DATE_MODIFIED
@@ -309,10 +333,13 @@ class MainActivity : ComponentActivity() {
             while (c.moveToNext()) {
                 val path = if (iData >= 0) c.getString(iData) else null
                 val album = if (iAlbum >= 0) c.getString(iAlbum) ?: "" else ""
-                val genre = if (iGenre >= 0) c.getString(iGenre)?.takeIf { it != "<unknown>" } ?: "" else ""
+                val mediaGenre = if (iGenre >= 0) c.getString(iGenre)?.takeIf { it != "<unknown>" } ?: "" else ""
+                val trackUri = ContentUris.withAppendedId(Media.EXTERNAL_CONTENT_URI, c.getLong(iId))
+                val cachedGenre = genreCache.optString(trackUri.toString(), "")
+                val genre = mediaGenre.ifBlank { cachedGenre }
                 val albumId = if (iAlbumId >= 0 && !c.isNull(iAlbumId)) c.getLong(iAlbumId) else -1L
                 found += Track(
-                    ContentUris.withAppendedId(Media.EXTERNAL_CONTENT_URI, c.getLong(iId)),
+                    trackUri,
                     c.getString(iTitle) ?: "Sin título",
                     if (iArtist >= 0) c.getString(iArtist)?.takeIf { it != "<unknown>" } ?: "Artista desconocido"
                     else "Artista desconocido",
@@ -668,114 +695,108 @@ private fun playAt(index: Int) {
         }.start()
     }
 
-    // ---------------- Búsqueda de género en cascada ----------------
+    // ---------------- Identificación de géneros en segundo plano ----------------
+
+    private fun readGenreCache(): JSONObject = try {
+        JSONObject(prefs.getString("genre_cache", "{}") ?: "{}")
+    } catch (_: Exception) { JSONObject() }
+
+    private fun startGenreScan() {
+        if (checkSelfPermission(audioPerm) != PackageManager.PERMISSION_GRANTED) {
+            ensurePermissions()
+            return
+        }
+        val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+        val request = OneTimeWorkRequestBuilder<GenreIdentificationWorker>()
+            .setConstraints(constraints)
+            .build()
+        WorkManager.getInstance(this).enqueueUniqueWork(
+            GenreIdentificationWorker.UNIQUE_WORK_NAME,
+            ExistingWorkPolicy.KEEP,
+            request
+        )
+        pushState { it.copy(genreScanStatus = "Preparando análisis…") }
+        Toast.makeText(this, "Identificación musical en segundo plano", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun pauseGenreScan() {
+        WorkManager.getInstance(this).cancelUniqueWork(GenreIdentificationWorker.UNIQUE_WORK_NAME)
+        pushState { it.copy(genreScanStatus = "Pausando…") }
+    }
+
+    private suspend fun refreshGenreScanStatus() {
+        try {
+            val infos = withContext(Dispatchers.IO) {
+                WorkManager.getInstance(this@MainActivity)
+                    .getWorkInfosForUniqueWork(GenreIdentificationWorker.UNIQUE_WORK_NAME).get()
+            }
+            val info = infos.firstOrNull { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.BLOCKED }
+                ?: infos.lastOrNull()
+            if (info != null) {
+                val data = if (info.state == WorkInfo.State.SUCCEEDED) info.outputData else info.progress
+                val processed = data.getInt("processed", 0)
+                val total = data.getInt("total", allTracks.size)
+                val identified = data.getInt("identified", 0)
+                val pending = data.getInt("pending", (total - processed).coerceAtLeast(0))
+                val status = when (info.state) {
+                    WorkInfo.State.ENQUEUED -> "En espera de conexión"
+                    WorkInfo.State.RUNNING -> data.getString("status") ?: "Analizando biblioteca…"
+                    WorkInfo.State.SUCCEEDED -> "Análisis completado"
+                    WorkInfo.State.CANCELLED -> "Pausado"
+                    WorkInfo.State.FAILED -> "Error; puedes reintentar"
+                    else -> "Preparando análisis…"
+                }
+                val previous = uiState.value.genreScanStatus
+                pushState { it.copy(genreScanStatus = status, genreScanProcessed = processed,
+                    genreScanTotal = total, genreScanIdentified = identified, genreScanPending = pending) }
+                if (info.state == WorkInfo.State.SUCCEEDED && previous != "Análisis completado") {
+                    val cache = readGenreCache()
+                    allTracks = allTracks.map { t ->
+                        val g = cache.optString(t.uri.toString(), "")
+                        if (t.genre.isBlank() && g.isNotBlank()) t.copy(genre = g) else t
+                    }
+                    filteredTracks = filteredTracks.map { t -> allTracks.firstOrNull { it.uri == t.uri } ?: t }
+                    pushState { it.copy(tracks = buildDisplayList()) }
+                    refreshNow()
+                }
+            } else {
+                val cache = readGenreCache()
+                val identified = cache.length()
+                pushState { it.copy(genreScanIdentified = identified,
+                    genreScanTotal = allTracks.size,
+                    genreScanPending = (allTracks.size - identified).coerceAtLeast(0)) }
+            }
+        } catch (_: Exception) { /* el estado se actualizará en el siguiente ciclo */ }
+    }
+
+    // ---------------- Búsqueda web de género para la canción actual ----------------
 
     private fun lookupGenreForCurrent() {
-        val t = svc?.current ?: run { Toast.makeText(this, "Reproduce una canción primero", Toast.LENGTH_SHORT).show(); return }
-        pushState { it.copy(genre = "Consultando Wikipedia…") }
+        val t = svc?.current ?: run {
+            Toast.makeText(this, "Reproduce una canción primero", Toast.LENGTH_SHORT).show()
+            return
+        }
+        pushState { it.copy(genre = "Buscando información web…") }
         Thread {
-            var result = lookupGenreWikipedia(t.title, t.artist)
-            if (result == null) result = lookupGenreDeezer(t.title, t.artist)
-            val finalResult = result ?: "No se encontró género en Wikipedia ni Deezer"
-            runOnUiThread { pushState { it.copy(genre = finalResult) } }
+            val result = try { GenreWebLookup.lookup(t.title, t.artist, t.album) } catch (_: Throwable) { null }
+            runOnUiThread {
+                if (!result.isNullOrBlank()) {
+                    val cache = readGenreCache()
+                    cache.put(t.uri.toString(), result)
+                    val evidence = try { JSONObject(prefs.getString("genre_evidence", "{}") ?: "{}") } catch (_: Exception) { JSONObject() }
+                    evidence.put(t.uri.toString(), JSONObject().put("source", "Búsqueda web")
+                        .put("confidence", "Media").put("status", "Probable").put("genre", result))
+                    prefs.edit().putString("genre_cache", cache.toString())
+                        .putString("genre_evidence", evidence.toString()).apply()
+                    allTracks = allTracks.map { track -> if (track.uri == t.uri && track.genre.isBlank()) track.copy(genre = result) else track }
+                    filteredTracks = filteredTracks.map { track -> allTracks.firstOrNull { it.uri == track.uri } ?: track }
+                    pushState { it.copy(genre = "Género identificado: $result", tracks = buildDisplayList()) }
+                    refreshNow()
+                } else {
+                    pushState { it.copy(genre = "No se encontró evidencia suficiente; queda sin clasificar") }
+                }
+            }
         }.start()
-    }
-
-    private fun lookupGenreWikipedia(title: String, artist: String): String? {
-        val encodedTitle = URLEncoder.encode("$title $artist", "UTF-8")
-        val searchUrl = "https://es.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encodedTitle&format=json&formatversion=2&srlimit=3"
-        val searchJson = req(searchUrl) ?: return null
-        val results = searchJson.optJSONObject("query")?.optJSONArray("search") ?: return null
-        for (i in 0 until results.length()) {
-            val page = results.optJSONObject(i) ?: continue
-            val pageId = page.optInt("pageid", -1)
-            if (pageId <= 0) continue
-            val qid = getWikidataIdFromPageId(pageId) ?: continue
-            val genre = getGenreFromWikidata(qid)
-            if (genre != null) return "Género: $genre"
-        }
-        return null
-    }
-
-    private fun getWikidataIdFromPageId(pageId: Int): String? {
-        val url = "https://es.wikipedia.org/w/api.php?action=query&prop=pageprops&pageids=$pageId&format=json&formatversion=2"
-        val json = req(url) ?: return null
-        val pages = json.optJSONObject("query")?.optJSONArray("pages") ?: return null
-        val page = pages.optJSONObject(0) ?: return null
-        return page.optJSONObject("pageprops")?.optString("wikibase_item", null)
-    }
-
-    private fun getGenreFromWikidata(qid: String): String? {
-        val url = "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=$qid&props=claims&format=json"
-        val json = req(url) ?: return null
-        val entity = json.optJSONObject("entities")?.optJSONObject(qid) ?: return null
-        val claims = entity.optJSONObject("claims") ?: return null
-        val genreClaims = claims.optJSONArray("P136") ?: return null
-        val genres = linkedSetOf<String>()
-        for (i in 0 until genreClaims.length()) {
-            val claim = genreClaims.optJSONObject(i) ?: continue
-            val mainsnak = claim.optJSONObject("mainsnak") ?: continue
-            val datavalue = mainsnak.optJSONObject("datavalue") ?: continue
-            val value = datavalue.optJSONObject("value") ?: continue
-            val genreQid = value.optString("id", "")
-            if (genreQid.isNotBlank()) {
-                val label = getLabelFromWikidata(genreQid)
-                if (label != null) genres.add(label)
-            }
-        }
-        return if (genres.isEmpty()) null else genres.take(5).joinToString(", ")
-    }
-
-    private fun getLabelFromWikidata(qid: String): String? {
-        val url = "https://www.wikidata.org/w/api.php?action=wbgetentities&ids=$qid&props=labels&languages=es|en&format=json"
-        val json = req(url) ?: return null
-        val entity = json.optJSONObject("entities")?.optJSONObject(qid) ?: return null
-        val labels = entity.optJSONObject("labels") ?: return null
-        return labels.optJSONObject("es")?.optString("value")
-            ?: labels.optJSONObject("en")?.optString("value")
-    }
-
-    private fun lookupGenreDeezer(title: String, artist: String): String? {
-        val query = URLEncoder.encode("$artist $title", "UTF-8")
-        val searchUrl = "https://api.deezer.com/search?q=$query&limit=5"
-        val searchJson = req(searchUrl) ?: return null
-        val tracks = searchJson.optJSONArray("data") ?: return null
-        for (i in 0 until tracks.length()) {
-            val track = tracks.optJSONObject(i) ?: continue
-            val album = track.optJSONObject("album") ?: continue
-            val albumId = album.optLong("id", -1)
-            if (albumId <= 0) continue
-            val albumJson = req("https://api.deezer.com/album/$albumId") ?: continue
-            val genreArr = albumJson.optJSONObject("genres")?.optJSONArray("data") ?: continue
-            val genreNames = mutableListOf<String>()
-            for (j in 0 until genreArr.length()) {
-                val g = genreArr.optJSONObject(j)?.optString("name", "")?.takeIf { it.isNotBlank() }
-                if (g != null) genreNames.add(g)
-            }
-            if (genreNames.isNotEmpty()) {
-                return "Género (Deezer): ${genreNames.take(3).joinToString(", ")}"
-            }
-        }
-        return null
-    }
-
-    private fun req(url: String): JSONObject? {
-        var conn: HttpURLConnection? = null
-        return try {
-            conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 10000
-                readTimeout = 10000
-                setRequestProperty("User-Agent", "AutomixAndroid/1.4 (genre lookup)")
-                setRequestProperty("Accept", "application/json")
-            }
-            if (conn.responseCode !in 200..299) null
-            else JSONObject(conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
-        } catch (_: Exception) {
-            null
-        } finally {
-            conn?.disconnect()
-        }
     }
 
     // ---------------- Refresh de UI ----------------
@@ -954,6 +975,8 @@ fun AutomixApp(
     onDetectBpm: () -> Unit,
     onDetectKey: () -> Unit,
     onLookupGenre: () -> Unit,
+    onStartGenreScan: () -> Unit,
+    onPauseGenreScan: () -> Unit,
     onMashup: (Int) -> Unit,
     onRequestPermissions: () -> Unit,
     onReshuffleQueue: () -> Unit,
@@ -1027,7 +1050,9 @@ fun AutomixApp(
                     onFilterAlbum = onFilterAlbum,
                     onFilterGenre = onFilterGenre,
                     onPlayTrack = onPlayFiltered,
-                    onPlayThisOrder = onPlayThisOrder
+                    onPlayThisOrder = onPlayThisOrder,
+                    onStartGenreScan = onStartGenreScan,
+                    onPauseGenreScan = onPauseGenreScan
                 )
                 2 -> MashupScreen(state, onMashup)
                 3 -> SettingsScreen(
@@ -1492,7 +1517,9 @@ fun LibraryScreen(
     onFilterAlbum: (String) -> Unit,
     onFilterGenre: (String) -> Unit,
     onPlayTrack: (List<Track>, Int) -> Unit,
-    onPlayThisOrder: (List<Track>) -> Unit
+    onPlayThisOrder: (List<Track>) -> Unit,
+    onStartGenreScan: () -> Unit,
+    onPauseGenreScan: () -> Unit
 ) {
     val tabs = listOf("Canciones", "Álbumes", "Artistas", "Géneros", "Carpetas")
     val context = LocalContext.current
@@ -1615,6 +1642,33 @@ fun LibraryScreen(
                 }
             }
         } else if (selectedTab == 3) {
+            Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), shape = RoundedCornerShape(14.dp)) {
+                Column(Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.AutoAwesome, null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Identificación musical", fontWeight = FontWeight.Bold)
+                            Text(state.genreScanStatus, fontSize = 12.sp, color = Color.Gray)
+                        }
+                        if (state.genreScanStatus == "Analizando biblioteca…" || state.genreScanStatus == "Preparando análisis…" || state.genreScanStatus == "Pausando…" || state.genreScanStatus == "En espera de conexión") {
+                            TextButton(onClick = onPauseGenreScan) { Text("Pausar") }
+                        } else {
+                            TextButton(onClick = onStartGenreScan) {
+                                Text(when {
+                                    state.genreScanStatus == "Pausado" || state.genreScanStatus.startsWith("Error") -> "Reanudar"
+                                    state.genreScanStatus == "Análisis completado" -> "Reintentar pendientes"
+                                    else -> "Iniciar"
+                                })
+                            }
+                        }
+                    }
+                    val progress = if (state.genreScanTotal > 0) (state.genreScanProcessed.toFloat() / state.genreScanTotal).coerceIn(0f, 1f) else 0f
+                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+                    Text("${state.genreScanProcessed}/${state.genreScanTotal} revisadas · ${state.genreScanIdentified} identificadas · ${state.genreScanPending} pendientes", fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(top = 6.dp))
+                    Text("Prioridad: metadatos locales → búsqueda web. Los resultados web se guardan como probables; si la evidencia es ambigua, la canción queda sin clasificar. Los resultados ya guardados no se vuelven a buscar. Esta versión no necesita API ni clave de servicio; no incluye todavía un modelo de IA remoto.", fontSize = 11.sp, color = Color.Gray)
+                }
+            }
             if (selectedGenre != null) {
                 Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = { selectedGenre = null }) { Icon(Icons.Default.ArrowBack, "Volver") }; Text(selectedGenre!!, fontWeight = FontWeight.Bold) }
                 val genreTracks = genres[selectedGenre].orEmpty()
