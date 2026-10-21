@@ -73,6 +73,7 @@ class MainActivity : ComponentActivity() {
     private val SORT_RANDOM = "Aleatorio"
     private val SORT_SMART = "Smart"
     private val SORT_TITLE = "Título"
+    private val SORT_RECENT = "Más recientes"
     private val SORT_ARTIST = "Artista"
     private val SORT_BPM = "BPM"
 
@@ -90,7 +91,8 @@ class MainActivity : ComponentActivity() {
     private var fade = 8
     private var skip = 0
     private var transitionStyle = "Desvanecer"
-    private var sortMode = SORT_RANDOM
+    // Orden principal predeterminado acordado: modificación más reciente primero.
+    private var sortMode = SORT_RECENT
     private var lastManualSort = SORT_TITLE
     private var selectedFolders: Set<String> = emptySet()
     private var currentGenre: String? = null
@@ -176,8 +178,8 @@ class MainActivity : ComponentActivity() {
         fade = prefs.getInt("fade", 8)
         skip = prefs.getInt("skip", 0)
         transitionStyle = prefs.getString("transition", "Desvanecer") ?: "Desvanecer"
-        sortMode = prefs.getString("sort_mode", SORT_RANDOM) ?: SORT_RANDOM
-        if (sortMode == SORT_SMART || sortMode == SORT_BPM) sortMode = SORT_RANDOM
+        sortMode = prefs.getString("sort_mode", SORT_RECENT) ?: SORT_RECENT
+        if (sortMode == SORT_SMART || sortMode == SORT_BPM) sortMode = SORT_RECENT
         lastManualSort = prefs.getString("sort_manual", SORT_TITLE) ?: SORT_TITLE
         selectedFolders = prefs.getStringSet("folders", emptySet())?.toSet() ?: emptySet()
         try {
@@ -375,6 +377,11 @@ class MainActivity : ComponentActivity() {
     // ---------------- Orden ----------------
 
     private fun buildDisplayList(): List<Track> = when (sortMode) {
+        SORT_RECENT -> filteredTracks.sortedWith(
+            compareByDescending<Track> { it.dateModifiedMs > 0L }
+                .thenByDescending { it.dateModifiedMs }
+                .thenBy { it.title.lowercase() }
+        )
         SORT_RANDOM -> filteredTracks.sortedBy { randomRank[it.uri.toString()] ?: Int.MAX_VALUE }
         SORT_SMART -> smartReorder(filteredTracks.sortedWith(Comparator { a, b -> collator.compare(a.title, b.title) }))
         SORT_ARTIST -> filteredTracks.sortedWith(Comparator { a, b ->
@@ -397,7 +404,7 @@ class MainActivity : ComponentActivity() {
     private fun selectSort(mode: String) {
         sortMode = mode
         if (mode == SORT_RANDOM) randomRank = allTracks.shuffled().mapIndexed { i, t -> t.uri.toString() to i }.toMap()
-        if (mode == SORT_TITLE || mode == SORT_ARTIST || mode == SORT_BPM) lastManualSort = mode
+        if (mode == SORT_TITLE || mode == SORT_ARTIST || mode == SORT_BPM || mode == SORT_RECENT) lastManualSort = mode
         prefs.edit().putString("sort_mode", sortMode).putString("sort_manual", lastManualSort).apply()
         val display = buildDisplayList()
         svc?.setRandomSelectionEnabled(mode == SORT_RANDOM)
@@ -1664,7 +1671,7 @@ fun LibraryScreen(
                         }
                     }
                     val progress = if (state.genreScanTotal > 0) (state.genreScanProcessed.toFloat() / state.genreScanTotal).coerceIn(0f, 1f) else 0f
-                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+                    LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
                     Text("${state.genreScanProcessed}/${state.genreScanTotal} revisadas · ${state.genreScanIdentified} identificadas · ${state.genreScanPending} pendientes", fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(top = 6.dp))
                     Text("Prioridad: metadatos locales → búsqueda web. Los resultados web se guardan como probables; si la evidencia es ambigua, la canción queda sin clasificar. Los resultados ya guardados no se vuelven a buscar. Esta versión no necesita API ni clave de servicio; no incluye todavía un modelo de IA remoto.", fontSize = 11.sp, color = Color.Gray)
                 }

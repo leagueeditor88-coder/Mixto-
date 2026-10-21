@@ -38,7 +38,7 @@ object GenreWebLookup {
                 val mentionsArtist = text.contains(normalizedArtist) || text.contains(normalizedArtist.take(12))
                 if (!mentionsTrack || !mentionsArtist) continue
                 val genreMatches = GENRE_TERMS.filter { term ->
-                    Regex("(?<![\\p{L}\\p{N}])${Regex.escape(term.first)}(?![\\p{L}\\p{N}])", RegexOption.IGNORE_CASE).containsMatchIn(text)
+                    Regex("(?<![\\p{L}\\p{N}])${Regex.escape(normalize(term.first))}(?![\\p{L}\\p{N}])", RegexOption.IGNORE_CASE).containsMatchIn(text)
                 }
                 candidates.addAll(genreMatches.map { it.second })
             }
@@ -48,6 +48,21 @@ object GenreWebLookup {
             connection.disconnect()
         }
     }
+
+    /** Convierte el HTML de los resultados en texto plano. */
+    private fun stripHtml(value: String): String =
+        Html.fromHtml(value, Html.FROM_HTML_MODE_LEGACY).toString()
+            .replace('\u00a0', ' ')
+            .replace(Regex("\\s+"), " ")
+            .trim()
+
+    /** Normaliza mayúsculas, espacios y diacríticos para comparar títulos y artistas. */
+    private fun normalize(value: String): String = java.text.Normalizer
+        .normalize(value, java.text.Normalizer.Form.NFD)
+        .replace(Regex("\\p{Mn}+"), "")
+        .lowercase(Locale.ROOT)
+        .replace(Regex("\\s+"), " ")
+        .trim()
 
     private val GENRE_TERMS = listOf(
         "vallenato" to "Vallenato", "salsa" to "Salsa", "merengue" to "Merengue",
