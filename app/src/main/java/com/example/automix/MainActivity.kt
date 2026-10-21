@@ -4,6 +4,7 @@ import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Check
 import android.Manifest
 import android.content.ComponentName
+import android.content.Context
 import android.content.ContentUris
 import android.content.Intent
 import android.content.ServiceConnection
@@ -24,6 +25,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -175,7 +179,9 @@ class MainActivity : ComponentActivity() {
             it.copy(
                 percent = percent, fadeSec = fade, skipSec = skip,
                 transition = transitionStyle, sortMode = sortMode,
-                folders = selectedFolders, bpmMap = bpmCache.toMap(), keyMap = keyCache.toMap()
+                folders = selectedFolders, bpmMap = bpmCache.toMap(), keyMap = keyCache.toMap(),
+                sortField = prefs.getString("library_sort_field", "Título") ?: "Título",
+                sortAscending = prefs.getBoolean("library_sort_ascending", true)
             )
         }
 
@@ -225,8 +231,15 @@ class MainActivity : ComponentActivity() {
                     onMashup = { second -> startMashup(second) },
                     onRequestPermissions = { ensurePermissions() },
                     onSearchChange = { q -> pushState { it.copy(searchQuery = q) } },
-                    onSortFieldChange = { f -> pushState { it.copy(sortField = f) } },
-                    onToggleSortDirection = { pushState { it.copy(sortAscending = !it.sortAscending) } },
+                    onSortFieldChange = { f ->
+                        prefs.edit().putString("library_sort_field", f).apply()
+                        pushState { it.copy(sortField = f) }
+                    },
+                    onToggleSortDirection = {
+                        val next = !uiState.value.sortAscending
+                        prefs.edit().putBoolean("library_sort_ascending", next).apply()
+                        pushState { it.copy(sortAscending = next) }
+                    },
                     onFilterArtist = { a -> pushState { it.copy(filterArtist = a) } },
                     onFilterAlbum = { a -> pushState { it.copy(filterAlbum = a) } },
                     onFilterGenre = { g -> pushState { it.copy(filterGenre = g) } },
@@ -276,7 +289,7 @@ class MainActivity : ComponentActivity() {
         val found = mutableListOf<Track>()
         val proj = arrayOf(
     Media._ID, Media.TITLE, Media.ARTIST, Media.DURATION, Media.DATA,
-    Media.ALBUM, Media.GENRE, Media.ALBUM_ID
+    Media.ALBUM, Media.GENRE, Media.ALBUM_ID, Media.DATE_MODIFIED
 )
 // Forzar columna ALBUM_ID si existe
         contentResolver.query(
@@ -292,6 +305,7 @@ class MainActivity : ComponentActivity() {
             val iAlbum = c.getColumnIndex(Media.ALBUM)
             val iGenre = c.getColumnIndex(Media.GENRE)
             val iAlbumId = c.getColumnIndex(Media.ALBUM_ID)
+            val iDateModified = c.getColumnIndex(Media.DATE_MODIFIED)
             while (c.moveToNext()) {
                 val path = if (iData >= 0) c.getString(iData) else null
                 val album = if (iAlbum >= 0) c.getString(iAlbum) ?: "" else ""
@@ -306,7 +320,8 @@ class MainActivity : ComponentActivity() {
                     path?.let { File(it).parent } ?: "Música",
                     album,
                     genre,
-                    albumId
+                    albumId,
+                    if (iDateModified >= 0 && !c.isNull(iDateModified)) c.getLong(iDateModified) * 1000L else 0L
                 )
             }
         }
@@ -1479,6 +1494,16 @@ fun LibraryScreen(
     onPlayTrack: (List<Track>, Int) -> Unit,
     onPlayThisOrder: (List<Track>) -> Unit
 ) {
+    val tabs = listOf("Canciones", "Álbumes", "Artistas", "Géneros", "Carpetas")
+    val context = LocalContext.current
+    val libraryPrefs = remember(context) { context.getSharedPreferences("automix", Context.MODE_PRIVATE) }
+    var selectedTab by remember { mutableIntStateOf(libraryPrefs.getInt("library_tab", 0).coerceIn(0, 4)) }
+    var selectedFolder by remember { mutableStateOf<String?>(null) }
+    var selectedAlbum by remember { mutableStateOf<String?>(null) }
+    var selectedArtist by remember { mutableStateOf<String?>(null) }
+    var selectedGenre by remember { mutableStateOf<String?>(null) }
+    var sortExpanded by remember { mutableStateOf(false) }
+
     val filtered = remember(
         state.tracks, state.searchQuery, state.filterArtist,
         state.filterAlbum, state.filterGenre, state.sortField,
@@ -1486,12 +1511,9 @@ fun LibraryScreen(
     ) {
         var list = state.tracks
         val q = state.searchQuery.trim().lowercase()
-        if (q.isNotEmpty()) {
-            list = list.filter {
-                it.title.lowercase().contains(q) ||
-                it.artist.lowercase().contains(q) ||
-                it.album.lowercase().contains(q)
-            }
+        if (q.isNotEmpty()) list = list.filter {
+            it.title.lowercase().contains(q) || it.artist.lowercase().contains(q) ||
+                it.album.lowercase().contains(q) || it.genre.lowercase().contains(q) || it.folder.lowercase().contains(q)
         }
         if (state.filterArtist.isNotEmpty()) list = list.filter { it.artist == state.filterArtist }
         if (state.filterAlbum.isNotEmpty()) list = list.filter { it.album == state.filterAlbum }
@@ -1499,182 +1521,126 @@ fun LibraryScreen(
         val asc = state.sortAscending
         when (state.sortField) {
             "Artista" -> if (asc) list.sortedBy { it.artist.lowercase() } else list.sortedByDescending { it.artist.lowercase() }
-            "Álbum"   -> if (asc) list.sortedBy { it.album.lowercase() } else list.sortedByDescending { it.album.lowercase() }
-            "BPM"     -> if (asc) list.sortedBy { state.bpmMap[it.uri.toString()] ?: Int.MAX_VALUE }
-                          else list.sortedByDescending { state.bpmMap[it.uri.toString()] ?: Int.MIN_VALUE }
-            "Género"  -> if (asc) list.sortedBy { it.genre.lowercase() } else list.sortedByDescending { it.genre.lowercase() }
-            else      -> if (asc) list.sortedBy { it.title.lowercase() } else list.sortedByDescending { it.title.lowercase() }
+            "Álbum" -> if (asc) list.sortedBy { it.album.lowercase() } else list.sortedByDescending { it.album.lowercase() }
+            "BPM" -> if (asc) list.sortedBy { state.bpmMap[it.uri.toString()] ?: Int.MAX_VALUE }
+                     else list.sortedByDescending { state.bpmMap[it.uri.toString()] ?: Int.MIN_VALUE }
+            "Género" -> if (asc) list.sortedBy { it.genre.lowercase() } else list.sortedByDescending { it.genre.lowercase() }
+            "Más antiguos" -> list.sortedBy { it.dateModifiedMs.takeIf { d -> d > 0 } ?: Long.MAX_VALUE }.let { if (asc) it else it.reversed() }
+            "Más recientes" -> list.sortedByDescending { it.dateModifiedMs }.let { if (asc) it else it.reversed() }
+            "Duración" -> if (asc) list.sortedBy { it.durationMs } else list.sortedByDescending { it.durationMs }
+            else -> if (asc) list.sortedBy { it.title.lowercase() } else list.sortedByDescending { it.title.lowercase() }
         }
     }
-
-    val artists = remember(state.tracks) {
-        listOf("") + state.tracks.map { it.artist }.filter { it.isNotBlank() }.distinct().sorted()
-    }
-    val albums = remember(state.tracks) {
-        listOf("") + state.tracks.map { it.album }.filter { it.isNotBlank() }.distinct().sorted()
-    }
-    val genres = remember(state.tracks) {
-        listOf("") + state.tracks.map { it.genre }.filter { it.isNotBlank() }.distinct().sorted()
-    }
+    val artists = remember(filtered) { filtered.groupBy { it.artist }.toSortedMap(String.CASE_INSENSITIVE_ORDER) }
+    val albums = remember(filtered) { filtered.groupBy { if (it.album.isBlank()) "Álbum desconocido" else it.album }.toSortedMap(String.CASE_INSENSITIVE_ORDER) }
+    val genres = remember(filtered) { filtered.groupBy { if (it.genre.isBlank()) "Género desconocido" else it.genre }.toSortedMap(String.CASE_INSENSITIVE_ORDER) }
+    val folders = remember(filtered) { filtered.groupBy { it.folder.ifBlank { "Música" } }.toSortedMap(String.CASE_INSENSITIVE_ORDER) }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        // 🔍 Buscador
+        ScrollableTabRow(selectedTabIndex = selectedTab, edgePadding = 8.dp) {
+            tabs.forEachIndexed { index, title ->
+                Tab(selected = selectedTab == index, onClick = {
+                    selectedTab = index
+                    libraryPrefs.edit().putInt("library_tab", index).apply()
+                    selectedFolder = null; selectedAlbum = null; selectedArtist = null; selectedGenre = null
+                }, text = { Text(title, maxLines = 1) })
+            }
+        }
         OutlinedTextField(
-            value = state.searchQuery,
-            onValueChange = onSearchChange,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            placeholder = { Text("Buscar por título, artista o álbum…") },
-            leadingIcon = { Icon(Icons.Default.Search, null) },
-            singleLine = true
+            value = state.searchQuery, onValueChange = onSearchChange,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            placeholder = { Text("Buscar canciones, artistas, álbumes…") },
+            leadingIcon = { Icon(Icons.Default.Search, null) }, singleLine = true
         )
-
-        // 🎯 Fila de orden: dropdown + botón ↑↓
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            var sortExpanded by remember { mutableStateOf(false) }
-            Box(Modifier.weight(1f)) {
-                OutlinedButton(
-                    onClick = { sortExpanded = true },
-                    modifier = Modifier.fillMaxWidth().height(44.dp),
-                    shape = RoundedCornerShape(22.dp)
-                ) {
-                    Icon(Icons.Default.Sort, null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        "Ordenar: ${state.sortField}",
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+        if (selectedTab == 0) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) {
+                    OutlinedButton(onClick = { sortExpanded = true }, modifier = Modifier.fillMaxWidth().height(42.dp)) {
+                        Icon(Icons.Default.Sort, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp))
+                        Text("Ordenar: ${state.sortField}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }) {
+                        listOf("Título", "Artista", "Álbum", "Género", "BPM", "Más antiguos", "Más recientes", "Duración").forEach { field ->
+                            DropdownMenuItem(text = { Text(when(field) { "Más antiguos" -> "Más antiguos primero"; "Más recientes" -> "Más recientes primero"; "Duración" -> "Duración"; else -> field }) }, onClick = { onSortChange(field); sortExpanded = false })
+                        }
+                    }
                 }
-                DropdownMenu(
-                    expanded = sortExpanded,
-                    onDismissRequest = { sortExpanded = false }
-                ) {
-                    listOf("Título", "Artista", "Álbum", "BPM", "Género").forEach { field ->
-                        DropdownMenuItem(
-                            text = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    if (state.sortField == field) {
-                                        Icon(
-                                            Icons.Default.Check,
-                                            null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(Modifier.width(8.dp))
-                                    }
-                                    Text(field, fontSize = 13.sp)
-                                }
-                            },
-                            onClick = {
-                                onSortChange(field)
-                                sortExpanded = false
+                Spacer(Modifier.width(8.dp))
+                FilledTonalIconButton(onClick = onToggleSortDirection) {
+                    Icon(if (state.sortAscending) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward, "Cambiar dirección")
+                }
+            }
+            Text("${filtered.size} canciones", fontSize = 12.sp, color = Color.Gray, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+            LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(filtered, key = { it.uri.toString() }) { track ->
+                    val idx = filtered.indexOf(track)
+                    TrackItem(track, state.bpmMap[track.uri.toString()], state.keyMap[track.uri.toString()], state.current?.uri == track.uri) { onPlayTrack(filtered, idx) }
+                }
+            }
+            Button(onClick = { onPlayThisOrder(filtered) }, modifier = Modifier.fillMaxWidth().padding(12.dp).height(48.dp), shape = RoundedCornerShape(14.dp)) {
+                Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("Reproducir este orden", fontWeight = FontWeight.Bold)
+            }
+        } else if (selectedTab == 1) {
+            if (selectedAlbum != null) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { selectedAlbum = null }) { Icon(Icons.Default.ArrowBack, "Volver") }
+                    Text(selectedAlbum!!, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                val albumTracks = albums[selectedAlbum].orEmpty()
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 12.dp)) {
+                    items(albumTracks, key = { it.uri.toString() }) { t -> TrackItem(t, state.bpmMap[t.uri.toString()], state.keyMap[t.uri.toString()], state.current?.uri == t.uri) { onPlayTrack(albumTracks, albumTracks.indexOf(t)) } }
+                }
+            } else {
+                LazyVerticalGrid(GridCells.Adaptive(145.dp), Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    gridItems(albums.keys.toList(), key = { it }) { album ->
+                        val list = albums[album].orEmpty(); val sample = list.firstOrNull()
+                        Card(modifier = Modifier.fillMaxWidth().clickable { selectedAlbum = album }, shape = RoundedCornerShape(14.dp)) {
+                            Column(Modifier.padding(10.dp)) {
+                                if (sample != null) AlbumArt(sample.albumId, 120.dp) else Icon(Icons.Default.Album, null, modifier = Modifier.size(120.dp))
+                                Spacer(Modifier.height(8.dp)); Text(album, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text("${list.firstOrNull()?.artist ?: "Artista desconocido"} · ${list.size} temas", fontSize = 11.sp, color = Color.Gray, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             }
-                        )
+                        }
                     }
                 }
             }
-
-            Surface(
-                shape = RoundedCornerShape(22.dp),
-                color = if (state.sortAscending)
-                    MaterialTheme.colorScheme.primary
-                else
-                    MaterialTheme.colorScheme.tertiary,
-                modifier = Modifier
-                    .height(44.dp)
-                    .clickable { onToggleSortDirection() }
-            ) {
-                Row(
-                    Modifier.padding(horizontal = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        imageVector = if (state.sortAscending) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    val dirLabel = when (state.sortField) {
-    "BPM" -> if (state.sortAscending) "Menor ↑" else "Mayor ↓"
-    else  -> if (state.sortAscending) "A-Z" else "Z-A"
-}
-Text(
-    text = dirLabel,
-    fontSize = 12.sp,
-    fontWeight = FontWeight.Bold,
-    color = MaterialTheme.colorScheme.onPrimary
-
-                    )
+        } else if (selectedTab == 2) {
+            if (selectedArtist != null) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = { selectedArtist = null }) { Icon(Icons.Default.ArrowBack, "Volver") }; Text(selectedArtist!!, fontWeight = FontWeight.Bold) }
+                val artistTracks = artists[selectedArtist].orEmpty()
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 12.dp)) { items(artistTracks, key = { it.uri.toString() }) { t -> TrackItem(t, state.bpmMap[t.uri.toString()], state.keyMap[t.uri.toString()], state.current?.uri == t.uri) { onPlayTrack(artistTracks, artistTracks.indexOf(t)) } } }
+            } else {
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    artists.forEach { (artist, list) -> item(key = artist) { Card(Modifier.fillMaxWidth().clickable { selectedArtist = artist }) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp)); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(artist, fontWeight = FontWeight.SemiBold); Text("${list.size} canciones", fontSize = 12.sp, color = Color.Gray) }; Icon(Icons.Default.ChevronRight, null) } } } }
+                }
+            }
+        } else if (selectedTab == 3) {
+            if (selectedGenre != null) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = { selectedGenre = null }) { Icon(Icons.Default.ArrowBack, "Volver") }; Text(selectedGenre!!, fontWeight = FontWeight.Bold) }
+                val genreTracks = genres[selectedGenre].orEmpty()
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 12.dp)) { items(genreTracks, key = { it.uri.toString() }) { t -> TrackItem(t, state.bpmMap[t.uri.toString()], state.keyMap[t.uri.toString()], state.current?.uri == t.uri) { onPlayTrack(genreTracks, genreTracks.indexOf(t)) } } }
+            } else {
+                LazyVerticalGrid(GridCells.Adaptive(145.dp), Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    gridItems(genres.keys.toList(), key = { it }) { genre ->
+                        val list = genres[genre].orEmpty()
+                        Card(Modifier.fillMaxWidth().clickable { selectedGenre = genre }, shape = RoundedCornerShape(14.dp)) { Column(Modifier.padding(16.dp)) { Icon(Icons.Default.LibraryMusic, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(34.dp)); Spacer(Modifier.height(12.dp)); Text(genre, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis); Text("${list.size} canciones", fontSize = 12.sp, color = Color.Gray) } }
+                    }
+                }
+            }
+        } else {
+            if (selectedFolder != null) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = { selectedFolder = null }) { Icon(Icons.Default.ArrowBack, "Volver") }; Text(selectedFolder!!, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                val folderTracks = folders[selectedFolder].orEmpty()
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 12.dp)) { items(folderTracks, key = { it.uri.toString() }) { t -> TrackItem(t, state.bpmMap[t.uri.toString()], state.keyMap[t.uri.toString()], state.current?.uri == t.uri) { onPlayTrack(folderTracks, folderTracks.indexOf(t)) } } }
+            } else {
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    folders.forEach { (folder, list) -> item(key = folder) { Card(Modifier.fillMaxWidth().clickable { selectedFolder = folder }) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Folder, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp)); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(folder.substringAfterLast('/'), fontWeight = FontWeight.SemiBold); Text("${list.size} canciones", fontSize = 12.sp, color = Color.Gray); if (folder.contains('/')) Text(folder, fontSize = 10.sp, color = Color.Gray, maxLines = 1, overflow = TextOverflow.Ellipsis) }; Icon(Icons.Default.ChevronRight, null) } } } }
                 }
             }
         }
-
-        Spacer(Modifier.height(8.dp))
-
-        // Filtros desplegables
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterDropdown("Artista", artists, state.filterArtist, onFilterArtist, Modifier.weight(1f))
-            FilterDropdown("Álbum", albums, state.filterAlbum, onFilterAlbum, Modifier.weight(1f))
-            FilterDropdown("Género", genres, state.filterGenre, onFilterGenre, Modifier.weight(1f))
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        Text(
-            "${filtered.size} canciones · ${state.sortField} ${if (state.sortAscending) "▲" else "▼"}",
-            fontSize = 12.sp, color = Color.Gray,
-            modifier = Modifier.padding(horizontal = 16.dp)
-        )
-
-        Spacer(Modifier.height(6.dp))
-
-        // Lista
-        LazyColumn(
-            Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            items(filtered) { track ->
-                val idx = filtered.indexOf(track)
-                TrackItem(
-                    track = track,
-                    bpm = state.bpmMap[track.uri.toString()],
-                    key = state.keyMap[track.uri.toString()],
-                    playing = state.current?.uri == track.uri,
-                    onClick = { onPlayTrack(filtered, idx) }
-                )
-            }
-        }
-
-        // ▶ Reproducir este orden
-        Button(
-            onClick = { onPlayThisOrder(filtered) },
-            modifier = Modifier.fillMaxWidth().padding(16.dp).height(52.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary
-            )
-        ) {
-            Icon(Icons.Default.PlayArrow, null)
-            Spacer(Modifier.width(8.dp))
-            Text("Reproducir este orden", fontWeight = FontWeight.Bold)
-        }
     }
 }
-    
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FilterDropdown(
