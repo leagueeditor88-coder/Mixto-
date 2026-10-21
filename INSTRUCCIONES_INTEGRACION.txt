@@ -1,0 +1,15 @@
+AUTOMIX — BLOQUE INTEGRADO DE BIBLIOTECA + IDENTIFICACIÓN DE GÉNEROS
+
+Este ZIP contiene solo archivos modificados/nuevos, con rutas relativas a la raíz del repositorio.
+
+Incluye la integración de los cambios previos de Biblioteca organizada y de Identificación musical en segundo plano:
+- MainActivity: vistas de biblioteca, preferencias y panel de progreso de identificación.
+- AutomixService: conserva cambios de servicio de las ramas integradas.
+- GenreIdentificationWorker / GenreWebLookup: trabajo en segundo plano y búsqueda web.
+- app/build.gradle.kts: dependencia WorkManager.
+
+Aplicación: descomprime en la raíz del repositorio y permite sobrescribir los archivos indicados. Haz commit antes para poder revertir si hace falta.
+
+VALIDACIÓN: el ZIP fue revisado para detectar marcadores de conflicto y rutas; no se ejecutó una compilación Android completa ni una prueba en dispositivo. Por ello, ejecutar GitHub Actions antes de darlo por terminado.
+
+Alcance: esta integración combina los parches existentes de biblioteca y géneros. No debe interpretarse como garantía de que todas las funciones descritas conceptualmente (por ejemplo, cada detalle del reproductor clásico/lock-screen) estén completamente implementadas; comprobar en la app tras compilar.
