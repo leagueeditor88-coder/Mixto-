@@ -1882,7 +1882,10 @@ fun SettingsScreen(
                 Text("Automix AI · Qwen2.5", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 Text(state.aiModelStatus, fontSize = 13.sp)
                 if (state.aiDownloading || state.aiModelProgress > 0) {
-                    LinearProgressIndicator(progress = { state.aiModelProgress / 100f }, modifier = Modifier.fillMaxWidth())
+                    LinearProgressIndicator(
+    progress = state.aiModelProgress / 100f,
+    modifier = Modifier.fillMaxWidth()
+)
                     Text("${state.aiModelProgress}%")
                 }
                 Button(onClick = onDownloadAiModel, enabled = !state.aiDownloading && !state.aiModelReady, modifier = Modifier.fillMaxWidth()) {
