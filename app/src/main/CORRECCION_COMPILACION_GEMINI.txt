@@ -1,0 +1,10 @@
+Corrección de compilación de la integración Gemini
+
+Se ajustó AutomixApp en app/src/main/java/com/example/automix/MainActivity.kt:
+- Se declara `appContext` y `geminiPrefs` en el ámbito de AutomixApp.
+- El guardado/borrado de la clave usa explícitamente `geminiPrefs`.
+- Toast.makeText recibe `appContext` y un mensaje String separado.
+
+Esto atiende los errores `Unresolved reference: prefs` y la sobrecarga de `Toast.makeText` reportados en el log.
+
+No se pudo ejecutar una compilación local en este entorno; ejecuta GitHub Actions para validar el APK.
