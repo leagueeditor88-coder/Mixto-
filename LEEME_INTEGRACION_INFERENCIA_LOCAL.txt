@@ -1,0 +1,12 @@
+Automix — integración de inferencia local Qwen2.5-0.5B + llama.cpp
+
+Archivos del parche (no reemplaza MainActivity ni AutomixService):
+- app/build.gradle.kts: añade la dependencia llama-android 0.1.1.
+- GenreIdentificationWorker.kt: si la búsqueda web no encuentra género o no hay conexión, intenta la clasificación local y guarda la fuente/evidencia.
+- LocalAiGenreClassifier.kt: nuevo clasificador GGUF local.
+
+Modelo esperado: app filesDir/local_ai/Qwen2.5-0.5B-Instruct-Q2_K.gguf, creado por LocalAiModelManager.
+
+IMPORTANTE: el motor nativo publicado solo incluye arm64-v8a. La inferencia local se omite en otros ABI. Con 2 GB de RAM puede fallar por memoria; se usa contexto 512 y 2 hilos. El género generado por un LLM se marca como inferido/revisar, no como dato confirmado. El parche no se ha compilado en este entorno; compilar con GitHub Actions y revisar el resultado antes de darlo por funcional.
+
+Integración: copiar los tres archivos a las mismas rutas en la raíz del proyecto actual, permitiendo reemplazar SOLO GenreIdentificationWorker.kt y app/build.gradle.kts. No reemplazar MainActivity.kt, AutomixService.kt ni archivos de carátulas/biblioteca.
