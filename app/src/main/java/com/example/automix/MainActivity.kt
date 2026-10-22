@@ -1095,6 +1095,9 @@ fun AutomixApp(
     onPlayFiltered: (List<Track>, Int) -> Unit,
     onPlayThisOrder: (List<Track>) -> Unit
 ) {
+    val context = LocalContext.current
+    val prefs = remember(context) { context.getSharedPreferences("automix", Context.MODE_PRIVATE) }
+    var geminiKey by remember { mutableStateOf(prefs.getString("gemini_api_key", "").orEmpty()) }
     var tab by remember { mutableStateOf(0) }
     Scaffold(
         topBar = {
@@ -1175,10 +1178,12 @@ fun AutomixApp(
                     onDownloadAiModel = onDownloadAiModel,
                     onRefreshAiModel = onRefreshAiModel,
                     onTestAiModel = onTestAiModel,
-                    geminiApiKey = prefs.getString("gemini_api_key", "").orEmpty(),
+                    geminiApiKey = geminiKey,
                     onSaveGeminiApiKey = { key ->
-                        prefs.edit().putString("gemini_api_key", key.trim()).apply()
-                        Toast.makeText(this, if (key.isBlank()) "Clave de Gemini borrada" else "Clave de Gemini guardada", Toast.LENGTH_SHORT).show()
+                        val clean = key.trim()
+                        prefs.edit().putString("gemini_api_key", clean).apply()
+                        geminiKey = clean
+                        Toast.makeText(context, if (clean.isBlank()) "Clave de Gemini borrada" else "Clave de Gemini guardada", Toast.LENGTH_SHORT).show()
                     }
                 )
             }
